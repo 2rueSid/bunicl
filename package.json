@@ -1,0 +1,16 @@
+{
+  "name": "bunicl",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "biome": "^0.3.3"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  },
+  "dependencies": {
+    "@logtape/logtape": "^2.3.7",
+    "@logtape/pretty": "^2.3.7"
+  }
+}
