@@ -92,6 +92,51 @@ embedding the CLI or testing it:
 const exitCode = await cli.run(["greet", "--name", "Ada"]);
 ```
 
+## Nested commands
+
+Use a space-separated command path to register subcommands. Options belong to
+the leaf command:
+
+```ts
+cli.command("project list", {
+  description: "List projects",
+  options: [
+    {
+      name: "name",
+      short: "n",
+      description: "Filter by project name",
+    },
+  ] as const,
+  run: async ({ options }) => {
+    await Bun.write(
+      Bun.stdout,
+      `Project filter: ${options.name ?? "all"}\n`,
+    );
+  },
+});
+```
+
+The command path maps directly to command-line arguments:
+
+```bash
+bun run ./src/cli.ts project list --name website
+bun run ./src/cli.ts project --help
+bun run ./src/cli.ts help project list
+```
+
+Command paths may also be arrays, which is useful when constructing them:
+
+```ts
+cli.command(["project", "list"], {
+  description: "List projects",
+  run: () => {},
+});
+```
+
+A path can be either a runnable command or a namespace for subcommands, but not
+both. For example, register `project list` and `project create` without also
+registering `project`.
+
 ## Option behavior
 
 - String options accept `--name value`, `--name=value`, `-n value`, or
@@ -140,7 +185,8 @@ const cli = createCli({
 The package exports:
 
 - `createCli(config)` and the `Cli` class.
-- `CliConfig`, `CliWriter`, `CommandDefinition`, and `CommandContext`.
+- `CliConfig`, `CliWriter`, `CommandDefinition`, `CommandContext`, and
+  `CommandPath`.
 - `OptionDefinition`, `StringOption`, `BooleanOption`, and `ParsedOptions`.
 
 Each `Cli` instance owns its command registry. Separate applications can use the

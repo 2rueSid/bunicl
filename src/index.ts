@@ -67,9 +67,12 @@ export interface CommandDefinition<
 	run: (context: CommandContext<Options>) => void | Promise<void>;
 }
 
+export type CommandPath = string | readonly string[];
+
 type ParsedValue = string | boolean | undefined;
 
 type RegisteredCommand = {
+	path: readonly string[];
 	name: string;
 	description: string;
 	options: readonly OptionDefinition[];
@@ -97,6 +100,31 @@ class CliUsageError extends Error {
 const commandNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const optionNamePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const shortNamePattern = /^[A-Za-z0-9]$/;
+
+function normalizeCommandPath(path: CommandPath): string[] {
+	const segments =
+		typeof path === "string"
+			? path.trim().split(/\s+/).filter(Boolean)
+			: [...path];
+	if (segments.length === 0) {
+		throw new TypeError("Command path must contain at least one command name.");
+	}
+	return segments;
+}
+
+function commandKey(path: readonly string[]): string {
+	return path.join("\u0000");
+}
+
+function isPathPrefix(
+	prefix: readonly string[],
+	path: readonly string[],
+): boolean {
+	return (
+		prefix.length <= path.length &&
+		prefix.every((segment, index) => segment === path[index])
+	);
+}
 
 const defaultStdout: CliWriter = async (text) => {
 	await Bun.write(Bun.stdout, text);
@@ -362,19 +390,36 @@ export class Cli {
 	}
 
 	command<const Options extends readonly OptionDefinition[] = readonly []>(
-		name: string,
+		path: CommandPath,
 		definition: CommandDefinition<Options>,
 	): this {
-		if (!commandNamePattern.test(name)) {
-			throw new TypeError(
-				`Invalid command name '${name}'. Use lowercase kebab-case.`,
-			);
+		const segments = normalizeCommandPath(path);
+		const name = segments.join(" ");
+		for (const segment of segments) {
+			if (!commandNamePattern.test(segment)) {
+				throw new TypeError(
+					`Invalid command name '${segment}' in '${name}'. Use lowercase kebab-case.`,
+				);
+			}
+			if (segment === "help") {
+				throw new TypeError(
+					`Command path '${name}' cannot contain 'help'; that command is built in.`,
+				);
+			}
 		}
-		if (name === "help") {
-			throw new TypeError("Command name 'help' is reserved by the CLI.");
-		}
-		if (this.#commands.has(name)) {
-			throw new TypeError(`Command '${name}' is already registered.`);
+
+		for (const existing of this.#commands.values()) {
+			if (commandKey(existing.path) === commandKey(segments)) {
+				throw new TypeError(`Command '${name}' is already registered.`);
+			}
+			if (
+				isPathPrefix(existing.path, segments) ||
+				isPathPrefix(segments, existing.path)
+			) {
+				throw new TypeError(
+					`Command '${name}' conflicts with '${existing.name}'. A command cannot also contain subcommands.`,
+				);
+			}
 		}
 
 		const options = definition.options ?? [];
@@ -384,7 +429,8 @@ export class Cli {
 			validateOption(name, option, seenNames, seenShortNames);
 		}
 
-		this.#commands.set(name, {
+		this.#commands.set(commandKey(segments), {
+			path: segments,
 			name,
 			description: definition.description,
 			options,
@@ -397,37 +443,19 @@ export class Cli {
 		return this;
 	}
 
-	help(commandName?: string): string {
-		if (commandName !== undefined) {
-			const command = this.#commands.get(commandName);
-			if (!command) {
-				throw new CliUsageError(`Unknown command '${commandName}'.`);
-			}
-			return this.#commandHelp(command);
-		}
+	help(commandPath?: CommandPath): string {
+		if (commandPath === undefined) return this.#groupHelp([]);
 
-		const lines = [`Usage: ${this.#config.name} <command> [options]`];
-		if (this.#config.description) lines.push("", this.#config.description);
+		const path = normalizeCommandPath(commandPath);
+		const command = this.#commands.get(commandKey(path));
+		if (command) return this.#commandHelp(command);
+		if (this.#isGroup(path)) return this.#groupHelp(path);
 
-		if (this.#commands.size > 0) {
-			const commandRows = [...this.#commands.values()].map(
-				(command) => [command.name, command.description] as const,
-			);
-			lines.push("", "Commands:", formatRows(commandRows));
-		}
-
-		const builtIns: Array<readonly [string, string]> = [
-			["-h, --help", "Show help"],
-		];
-		if (this.#config.version !== undefined) {
-			builtIns.push(["-V, --version", "Show version"]);
-		}
-		lines.push("", "Options:", formatRows(builtIns));
-		return `${lines.join("\n")}\n`;
+		throw new CliUsageError(`Unknown command '${path.join(" ")}'.`);
 	}
 
 	async run(args: readonly string[] = Bun.argv.slice(2)): Promise<number> {
-		const [requestedCommand, ...commandArgs] = args;
+		const requestedCommand = args[0];
 
 		if (
 			requestedCommand === undefined ||
@@ -450,26 +478,46 @@ export class Cli {
 		}
 
 		if (requestedCommand === "help") {
-			const target = commandArgs[0];
-			if (target === undefined) {
+			const target = args.slice(1);
+			if (target.length === 0) {
 				await this.#stdout(this.help());
 				return 0;
 			}
-			const command = this.#commands.get(target);
-			if (!command) {
-				await this.#unknownCommand(target);
+			try {
+				await this.#stdout(this.help(target));
+				return 0;
+			} catch (error) {
+				if (!(error instanceof CliUsageError)) throw error;
+				await this.#unknownCommand(target.join(" "));
 				return 2;
 			}
-			await this.#stdout(this.#commandHelp(command));
+		}
+
+		const trailingHelp = args.at(-1);
+		const possibleGroup = args.slice(0, -1);
+		if (
+			(trailingHelp === "--help" || trailingHelp === "-h") &&
+			this.#isGroup(possibleGroup)
+		) {
+			await this.#stdout(this.#groupHelp(possibleGroup));
 			return 0;
 		}
 
-		const command = this.#commands.get(requestedCommand);
+		const command = this.#commands
+			.values()
+			.find((candidate) => isPathPrefix(candidate.path, args));
 		if (!command) {
-			await this.#unknownCommand(requestedCommand);
+			if (this.#isGroup(args)) {
+				await this.#stdout(this.#groupHelp(args));
+				return 0;
+			}
+			await this.#unknownCommand(
+				args.filter((argument) => !argument.startsWith("-")).join(" "),
+			);
 			return 2;
 		}
 
+		const commandArgs = args.slice(command.path.length);
 		try {
 			const parsed = parseCommandArguments(command, commandArgs);
 			if (parsed.help) {
@@ -485,6 +533,53 @@ export class Cli {
 			);
 			return 2;
 		}
+	}
+
+	#isGroup(path: readonly string[]): boolean {
+		return [...this.#commands.values()].some(
+			(command) =>
+				path.length < command.path.length &&
+				isPathPrefix(path, command.path),
+		);
+	}
+
+	#groupHelp(path: readonly string[]): string {
+		const commandPrefix = [this.#config.name, ...path].join(" ");
+		const lines = [`Usage: ${commandPrefix} <command> [options]`];
+		if (path.length === 0 && this.#config.description) {
+			lines.push("", this.#config.description);
+		}
+
+		const children = new Map<string, string>();
+		for (const command of this.#commands.values()) {
+			if (!isPathPrefix(path, command.path)) continue;
+			const child = command.path[path.length];
+			if (child === undefined || children.has(child)) continue;
+			const isLeaf = command.path.length === path.length + 1;
+			children.set(
+				child,
+				isLeaf ? command.description : "Additional subcommands",
+			);
+		}
+		if (children.size > 0) {
+			const commandRows = [...children].map(
+				([name, description]) =>
+					[
+						this.#isGroup([...path, name]) ? `${name} <command>` : name,
+						description,
+					] as const,
+			);
+			lines.push("", "Commands:", formatRows(commandRows));
+		}
+
+		const builtIns: Array<readonly [string, string]> = [
+			["-h, --help", "Show help"],
+		];
+		if (path.length === 0 && this.#config.version !== undefined) {
+			builtIns.push(["-V, --version", "Show version"]);
+		}
+		lines.push("", "Options:", formatRows(builtIns));
+		return `${lines.join("\n")}\n`;
 	}
 
 	#commandHelp(command: RegisteredCommand): string {

@@ -57,6 +57,44 @@ describe("Cli", () => {
 		expect(output.stderr).toEqual([]);
 	});
 
+	test("routes nested commands and scopes options to the leaf command", async () => {
+		const output = createOutput();
+		let received: unknown;
+		const cli = createCli({
+			name: "example",
+			stdout: output.writeStdout,
+			stderr: output.writeStderr,
+		});
+		cli.command("project list", {
+			description: "List projects",
+			options: [
+				{
+					name: "name",
+					short: "n",
+					description: "Filter by project name",
+				},
+			] as const,
+			run: (context) => {
+				received = context;
+			},
+		});
+
+		expect(
+			await cli.run(["project", "list", "--name", "website"]),
+		).toBe(0);
+		expect(received).toEqual({
+			options: { name: "website" },
+			positionals: [],
+		});
+
+		expect(await cli.run(["project", "--help"])).toBe(0);
+		expect(output.stdout.join("")).toContain(
+			"Usage: example project <command>",
+		);
+		expect(output.stdout.join("")).toContain("list  List projects");
+		expect(output.stderr).toEqual([]);
+	});
+
 	test("reports invalid input with command-specific recovery", async () => {
 		const output = createOutput();
 		const cli = createCli({
