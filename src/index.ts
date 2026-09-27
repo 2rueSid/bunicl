@@ -58,10 +58,12 @@ class Command<const S extends readonly CommandArgument[]>
 
 export class CLI {
 	name: string;
+	description: string = "";
 	private commands = new Map<string, RegisteredCommand>();
 
-	constructor(name: string) {
+	constructor(name: string, description: string = "") {
 		this.name = name;
+		this.description = description;
 	}
 
 	addCommand(name: string, path: string[]): Command<[]>;
@@ -99,20 +101,25 @@ export class CLI {
 		}
 
 		const commandKey = commandPath.join(".");
+		const command = this.commands.get(commandKey);
 
-		if (!this.commands.has(commandKey)) {
+		if (!command) {
+			this.help();
 			throw new Error(`Command ${commandKey} doesn't exists`);
+		} else {
 		}
 
-		const command = this.commands.get(commandKey)!;
-
 		await command.run(args);
+	}
+
+	help() {
+		console.log(cli.description);
 	}
 }
 
 ////////////// TESTING ////////////////////
 
-const cli = new CLI("greeter");
+const cli = new CLI("greeter", "a convinient method to meet people");
 
 const sayHi = cli.addCommand(
 	"say-hi",
@@ -157,4 +164,5 @@ const simpleCmd = cli.addCommand("simple", ["objects"]);
 simpleCmd.on(async () => {
 	console.log("im simple cmd");
 });
+
 cli.run();
