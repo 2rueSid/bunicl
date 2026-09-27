@@ -15,6 +15,7 @@
   },
   "files": [
     "src/index.ts",
+    "src/models.ts",
     "README.md"
   ],
   "sideEffects": false,
@@ -28,5 +29,8 @@
   "devDependencies": {
     "@types/bun": "^1.4.2",
     "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@biomejs/biome": "^2.5.14"
   }
 }

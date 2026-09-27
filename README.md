@@ -1,193 +1,49 @@
 # bunicl
 
-`bunicl` is a type-safe command-line interface library for Bun. It provides
-isolated CLI instances, typed string and boolean options, positional arguments,
-generated help, and explicit exit codes. The runtime has no third-party
-dependencies and uses `Bun.argv` and `Bun.write`.
+`bunicl` is a Bun CLI library under development. The current source exports
+`CLI` and `Command` from `src/index.ts`.
 
-## Requirements
+## Register a typed command
 
-- Bun 1.4 or newer
-- TypeScript when consuming the source package from a TypeScript project
-
-## Install from Git
-
-This package is private to prevent accidental registry publication. Install it
-directly from the Git repository after creating the remote:
-
-```bash
-bun add git+ssh://git@github.com/<owner>/bunicl.git
-```
-
-Use an HTTPS URL instead when SSH access is unavailable:
-
-```bash
-bun add git+https://github.com/<owner>/bunicl.git
-```
-
-For local development, install the checkout by path:
-
-```bash
-bun add ../bunicl
-```
-
-## Define a CLI
+`CLI.addCommand(name, handler, schema)` infers the handler's argument types from
+the schema. Each option has a name and an optional `type` (`"string"` or
+`"boolean"`); omitted types are strings.
 
 ```ts
-#!/usr/bin/env bun
+import { CLI } from "bunicl";
 
-import { createCli } from "bunicl";
-
-const cli = createCli({
-  name: "acme",
-  version: "1.0.0",
-  description: "Acme project utilities",
-});
-
-cli.command("greet", {
-  description: "Greet a person",
-  options: [
-    {
-      name: "name",
-      short: "n",
-      description: "Name to greet",
-      required: true,
-    },
-    {
-      name: "loud",
-      short: "l",
-      type: "boolean",
-      description: "Use uppercase output",
-    },
+const cli = new CLI("acme");
+const command = cli.addCommand(
+  "greet",
+  ({ name, loud }) => {
+    console.log(loud ? name.toUpperCase() : name);
+  },
+  [
+    { name: "name", type: "string" },
+    { name: "loud", type: "boolean" },
   ] as const,
-  run: async ({ options, positionals }) => {
-    const greeting = `Hello, ${options.name}`;
-    await Bun.write(
-      Bun.stdout,
-      `${options.loud ? greeting.toUpperCase() : greeting}\n`,
-    );
-
-    if (positionals.length > 0) {
-      await Bun.write(Bun.stdout, `Extra values: ${positionals.join(", ")}\n`);
-    }
-  },
-});
-
-const exitCode = await cli.run();
-if (exitCode !== 0) process.exitCode = exitCode;
+);
 ```
 
-Run the command through Bun:
+The returned command retains the schema in `command.arguments`. The registry
+stores commands under their names, but its handler cannot be called through the
+registry's type: the registry does not track which schema belongs to a lookup
+key. Use the typed value returned by `addCommand` when calling a handler with
+already validated arguments.
+
+## Current runtime limitations
+
+`CLI.run()` currently logs `Bun.argv` and parses three hard-coded flags with
+`util.parseArgs`. It does not dispatch registered commands or validate their
+schemas. Importing `src/index.ts` also runs a demonstration CLI at module load
+time. The registration example above is not yet an executable CLI.
+
+## Development
 
 ```bash
-bun run ./src/cli.ts greet --name Ada --loud
-bun run ./src/cli.ts greet -ln Ada
-bun run ./src/cli.ts greet --help
+bun install
+bun run typecheck
 ```
 
-`cli.run()` reads `Bun.argv.slice(2)` by default. Pass an argument array when
-embedding the CLI or testing it:
-
-```ts
-const exitCode = await cli.run(["greet", "--name", "Ada"]);
-```
-
-## Nested commands
-
-Use a space-separated command path to register subcommands. Options belong to
-the leaf command:
-
-```ts
-cli.command("project list", {
-  description: "List projects",
-  options: [
-    {
-      name: "name",
-      short: "n",
-      description: "Filter by project name",
-    },
-  ] as const,
-  run: async ({ options }) => {
-    await Bun.write(
-      Bun.stdout,
-      `Project filter: ${options.name ?? "all"}\n`,
-    );
-  },
-});
-```
-
-The command path maps directly to command-line arguments:
-
-```bash
-bun run ./src/cli.ts project list --name website
-bun run ./src/cli.ts project --help
-bun run ./src/cli.ts help project list
-```
-
-Command paths may also be arrays, which is useful when constructing them:
-
-```ts
-cli.command(["project", "list"], {
-  description: "List projects",
-  run: () => {},
-});
-```
-
-A path can be either a runnable command or a namespace for subcommands, but not
-both. For example, register `project list` and `project create` without also
-registering `project`.
-
-## Option behavior
-
-- String options accept `--name value`, `--name=value`, `-n value`, or
-  `-nvalue`.
-- Boolean options accept `--loud`, `--loud=true`, `--loud=false`, or
-  `--no-loud`.
-- Short boolean flags can be grouped. For example, `-vl` enables `-v` and
-  `-l`.
-- `--` stops option parsing. Remaining values are available through
-  `positionals`.
-- Optional string options are `string | undefined`.
-- Boolean options are always `boolean` and default to `false`.
-- A string option with `required: true` or `default` is always `string`.
-
-The `as const` assertion preserves literal option names and gives the command
-handler exact option types.
-
-## Errors and exit codes
-
-`run()` returns:
-
-- `0` after a command runs or help/version output is written.
-- `2` for invalid commands, options, or missing required options.
-
-Usage errors are written to stderr with command-specific help. Exceptions thrown
-by a command handler are not caught or rewritten, so the calling application
-retains the original error and stack.
-
-## Output control
-
-The default writers call `Bun.write(Bun.stdout, text)` and
-`Bun.write(Bun.stderr, text)`. Supply writers to capture or redirect output:
-
-```ts
-const messages: string[] = [];
-const cli = createCli({
-  name: "embedded",
-  stdout: (text) => {
-    messages.push(text);
-  },
-});
-```
-
-## API
-
-The package exports:
-
-- `createCli(config)` and the `Cli` class.
-- `CliConfig`, `CliWriter`, `CommandDefinition`, `CommandContext`, and
-  `CommandPath`.
-- `OptionDefinition`, `StringOption`, `BooleanOption`, and `ParsedOptions`.
-
-Each `Cli` instance owns its command registry. Separate applications can use the
-library in the same process without sharing commands or configuration.
+The typecheck includes a compile-time regression for schema inference and safe
+registry access in `src/index.typecheck.ts`.
