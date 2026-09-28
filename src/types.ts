@@ -37,6 +37,9 @@ export interface RegisteredCommand {
 	readonly path: readonly string[];
 	readonly name: string;
 	readonly schema: readonly CommandArgument[];
+	readonly description?: string;
 
-	run(argv: string[]): Promise<void>;
+	run(argv: string[], commands: Iterable<RegisteredCommand>): Promise<void>;
+	addDescription(description: string): void;
+	help(commands: Iterable<RegisteredCommand>): void;
 }

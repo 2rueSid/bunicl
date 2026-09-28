@@ -1,49 +1,69 @@
 # bunicl
 
-`bunicl` is a Bun CLI library under development. The current source exports
-`CLI` and `Command` from `src/index.ts`.
+`bunicl` is a Bun CLI library under development.
 
-## Register a typed command
-
-`CLI.addCommand(name, handler, schema)` infers the handler's argument types from
-the schema. Each option has a name and an optional `type` (`"string"` or
-`"boolean"`); omitted types are strings.
+## Register commands
 
 ```ts
 import { CLI } from "bunicl";
 
-const cli = new CLI("acme");
-const command = cli.addCommand(
-  "greet",
-  ({ name, loud }) => {
-    console.log(loud ? name.toUpperCase() : name);
-  },
-  [
-    { name: "name", type: "string" },
-    { name: "loud", type: "boolean" },
-  ] as const,
-);
+const cli = new CLI("acme", "Acme tools");
+const hello = cli.addCommand("hello", []);
+hello.addDescription("say hello");
+hello.on(async () => console.log("Hello"));
+
+const objects = cli.addCommand("objects", []);
+objects.addDescription("manage objects");
+const get = cli.addCommand("get", ["objects"]);
+get.addDescription("fetch an object");
+get.on(async () => console.log("Fetching object"));
+
+cli.run();
 ```
 
-The returned command retains the schema in `command.arguments`. The registry
-stores commands under their names, but its handler cannot be called through the
-registry's type: the registry does not track which schema belongs to a lookup
-key. Use the typed value returned by `addCommand` when calling a handler with
-already validated arguments.
+The second argument to `addCommand` is the parent path; `get` above is invoked
+as `acme objects get`. Register a handler with `command.on(async (args) => { ... })`
+to execute the command. Commands can also declare a third argument: an array
+of option descriptors with `name`, `type` (`"string"` or `"boolean"`), and
+optional `short`, `required`, `multiple`, `default`, and `description` fields.
 
-## Current runtime limitations
+## Help
 
-`CLI.run()` currently logs `Bun.argv` and parses three hard-coded flags with
-`util.parseArgs`. It does not dispatch registered commands or validate their
-schemas. Importing `src/index.ts` also runs a demonstration CLI at module load
-time. The registration example above is not yet an executable CLI.
+Help shows the description, usage, available options, and immediate commands
+in aligned columns. Long descriptions wrap under the description column:
+
+```text
+Acme tools
+
+Usage: acme COMMAND ...
+
+Available options:
+    -h, --help  Prints help information
+
+Available commands:
+    hello    say hello
+    objects  manage objects
+```
+
+- `acme --help` shows root help; `acme objects --help` shows the `objects`
+  description and its immediate subcommands (`get  fetch an object`).
+- `acme objects get --help` calls `get.help()` and shows its declared options
+  without running its handler.
+- A path used only as a parent, without a registered command, supports group
+  help too. Its group entry has no description.
+- An unknown command at any depth prints an error above root help. For
+  example, `acme objects set` lists first-level commands, not `objects`
+  subcommands.
+
+Nested command descriptions appear at their parent level, not at the root.
+You can also call `cli.help()` or a registered command's `help()` directly.
 
 ## Development
 
 ```bash
 bun install
+bun test
 bun run typecheck
 ```
 
-The typecheck includes a compile-time regression for schema inference and safe
-registry access in `src/index.typecheck.ts`.
+`src/index.ts` runs a demonstration CLI only when executed directly.

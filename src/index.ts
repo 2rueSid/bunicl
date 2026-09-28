@@ -1,27 +1,72 @@
-import { type ParseArgsOptionDescriptor, parseArgs } from "util";
+import {
+	type ParseArgsOptionDescriptor,
+	parseArgs,
+	styleText,
+} from "node:util";
+import { formatHelp } from "./help";
 import type { Args, CommandArgument, RegisteredCommand } from "./types";
+
+const helpArgument = {
+	name: "help",
+	short: "h",
+	type: "boolean",
+	description: "Prints help information",
+	multiple: false,
+	default: false,
+} as const satisfies CommandArgument;
+
+type WithHelp<S extends readonly CommandArgument[]> = readonly [
+	...S,
+	typeof helpArgument,
+];
 
 class Command<const S extends readonly CommandArgument[]>
 	implements RegisteredCommand
 {
 	path: string[];
 	name: string;
-	schema: S;
+	readonly schema: WithHelp<S>;
+	description?: string | undefined;
 
-	private handler?: (args: Args<S>) => Promise<void>;
+	private handler?: (args: Args<WithHelp<S>>) => Promise<void>;
 
-	constructor(path: string[], name: string, schema: S) {
+	constructor(
+		path: string[],
+		name: string,
+		schema: S,
+		private readonly cliName: string,
+	) {
 		this.name = name;
 		this.path = path;
-		this.schema = schema;
+		this.schema = [...schema, helpArgument] as const;
 	}
 
-	on(handler: (args: Args<S>) => Promise<void>): this {
+	on(handler: (args: Args<WithHelp<S>>) => Promise<void>): this {
 		this.handler = handler;
 		return this;
 	}
 
-	async run(runtimeArguments: string[]): Promise<void> {
+	addDescription(description: string): void {
+		this.description = description;
+	}
+
+	help(commands: Iterable<RegisteredCommand> = []): void {
+		const path = [...this.path, this.name];
+		console.log(
+			formatHelp(
+				[this.cliName, ...path].join(" "),
+				this.description,
+				this.schema,
+				commands,
+				path,
+			),
+		);
+	}
+
+	async run(
+		runtimeArguments: string[],
+		commands: Iterable<RegisteredCommand>,
+	): Promise<void> {
 		if (!this.handler) throw new Error(`No handler for ${this.name}`);
 
 		const options = this.schema.reduce((acc, arg) => {
@@ -29,28 +74,31 @@ class Command<const S extends readonly CommandArgument[]>
 				type: arg.type,
 			};
 
-			if (arg.short) {
+			if (arg?.short) {
 				cmdArg.short = arg.short;
 			}
 
-			if (arg.multiple) {
+			if (arg?.multiple) {
 				cmdArg.multiple = arg.multiple;
 			}
 
-			if (arg.default) {
+			if (arg?.default) {
 				cmdArg.default = arg.default;
 			}
 
 			return Object.assign(acc, { [arg.name]: cmdArg });
 		}, {});
 
-		console.log(options);
-
 		const { values: parsedValues } = parseArgs({
 			args: runtimeArguments,
 			options: options,
 			allowPositionals: true,
 		}) as { values: Args<S>; positionals: string[] };
+
+		if ("help" in parsedValues && parsedValues.help) {
+			this.help(commands);
+			return;
+		}
 
 		await this.handler(parsedValues);
 	}
@@ -83,86 +131,112 @@ export class CLI {
 			throw new Error(`${fullCmdPath} already exists`);
 		}
 
-		const cmd = new Command(path, name, schema);
+		const cmd = new Command(path, name, schema, this.name);
 		this.commands.set(fullCmdPath, cmd);
 		return cmd;
 	}
 
 	async run() {
 		const args = Bun.argv.slice(2);
+		const commandPath: string[] = [];
 
-		const commandPath = [];
 		for (const arg of args) {
-			if (arg.startsWith("-")) {
-				break;
-			}
-
+			if (arg.startsWith("-")) break;
 			commandPath.push(arg);
 		}
 
-		const commandKey = commandPath.join(".");
-		const command = this.commands.get(commandKey);
-
-		if (!command) {
+		if (
+			commandPath.length === 0 &&
+			(args.length === 0 || args.includes("--help") || args.includes("-h"))
+		) {
 			this.help();
-			throw new Error(`Command ${commandKey} doesn't exists`);
-		} else {
+			return;
 		}
 
-		await command.run(args);
+		const commandPathStr = commandPath.join(".");
+		const command = this.commands.get(commandPathStr);
+
+		if (!command && commandPath.length) {
+			const tmpCmd = new Command(
+				[],
+				commandPath.reverse()[0] || "",
+				[],
+				this.name,
+			);
+
+			tmpCmd.help(this.commands.values());
+			return;
+		}
+
+		if (!command) {
+			this.help([
+				styleText("red", `Command ${commandPath.join(" ")} doesn't exist`),
+			]);
+			return;
+		}
+
+		await command.run(args, this.commands.values());
 	}
 
-	help() {
-		console.log(cli.description);
+	help(additionalText: string[] = []) {
+		console.log(
+			...additionalText,
+			formatHelp(this.name, this.description, [], this.commands.values(), [], {
+				"-h, --help": "Prints help information",
+			}),
+		);
 	}
 }
 
-////////////// TESTING ////////////////////
+// Example CLI for running this module directly.
+if (import.meta.main) {
+	const cli = new CLI("greeter", "a convinient method to meet people");
 
-const cli = new CLI("greeter", "a convinient method to meet people");
+	const sayHi = cli.addCommand(
+		"say-hi",
+		[],
+		[
+			{
+				name: "name",
+				short: "n",
+				required: true,
+				type: "string",
+			},
+			{
+				name: "age",
+				short: "a",
+				type: "string",
+			},
+		],
+	);
 
-const sayHi = cli.addCommand(
-	"say-hi",
-	[],
-	[
-		{
-			name: "name",
-			short: "n",
-			required: true,
-			type: "string",
-		},
-		{
-			name: "age",
-			short: "a",
-			type: "string",
-		},
-	],
-);
+	sayHi.addDescription("way to say hi to the provided name and age.");
 
-sayHi.on(async (args) => {
-	console.log(`Hello ${args.name} of age ${args.age}`);
-});
+	sayHi.on(async (args) => {
+		console.log(`Hello ${args.name} of age ${args.age}`);
+	});
 
-const objectsGet = cli.addCommand(
-	"get",
-	["objects"],
-	[
-		{
-			name: "id",
-			type: "string",
-			required: true,
-		},
-	],
-);
+	const objectsGet = cli.addCommand(
+		"get",
+		["objects"],
+		[
+			{
+				name: "id",
+				type: "string",
+				required: true,
+			},
+		],
+	);
 
-objectsGet.on(async (args) => {
-	console.log(`getting object for ${args.id}`);
-});
+	objectsGet.on(async (args) => {
+		console.log(`getting object for ${args.id}`);
+	});
 
-const simpleCmd = cli.addCommand("simple", ["objects"]);
+	const simpleCmd = cli.addCommand("simple", ["objects"]);
 
-simpleCmd.on(async () => {
-	console.log("im simple cmd");
-});
+	simpleCmd.on(async () => {
+		console.log("im simple cmd");
+	});
 
-cli.run();
+	cli.run();
+}
