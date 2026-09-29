@@ -2,6 +2,14 @@
 
 `bunicl` is a Bun CLI library under development.
 
+## Installation
+
+Install a specific GitHub release:
+
+```bash
+bun add github:2rueSid/bunicl#v0.2.1
+```
+
 ## Register commands
 
 ```ts
